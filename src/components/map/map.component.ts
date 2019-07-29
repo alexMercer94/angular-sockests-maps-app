@@ -1,5 +1,7 @@
+import { HttpClient } from '@angular/common/http';
 import { Component, ElementRef, OnInit, ViewChild } from '@angular/core';
 import { Place } from '../../interfaces/place';
+import { WebsocketService } from '../../providers/websocket.service';
 
 @Component({
   selector: 'app-map',
@@ -11,28 +13,46 @@ export class MapComponent implements OnInit {
   map: google.maps.Map;
   markers: google.maps.Marker[] = [];
   infoWindows: google.maps.InfoWindow[] = [];
-  lugares: Place[] = [
-    {
-      name: 'Udemy',
-      lat: 37.784679,
-      lng: -122.395936
-    },
-    {
-      name: 'Bahía de San Francisco',
-      lat: 37.798933,
-      lng: -122.377732
-    },
-    {
-      name: 'The Palace Hotel',
-      lat: 37.788578,
-      lng: -122.401745
-    }
-  ];
+  lugares: Place[] = [];
 
-  constructor() {}
+  constructor(private http: HttpClient, private wsService: WebsocketService) {}
 
   ngOnInit() {
-    this.loadMap();
+    this.http.get('http://localhost:3000/map').subscribe((places: Place[]) => {
+      this.lugares = places;
+      this.loadMap();
+    });
+
+    this.listenSockets();
+  }
+
+  listenSockets(): void {
+    // Socket Marcador-nuevo
+    this.wsService.listen('new-marker').subscribe((marker: Place) => {
+      this.addMarker(marker);
+    });
+
+    // Socket Marcador-mover
+    this.wsService.listen('move-marker').subscribe((marker: Place) => {
+      for (const i in this.markers) {
+        if (this.markers[i].getTitle() === marker.id) {
+          const latLng = new google.maps.LatLng(marker.lat, marker.lng);
+          this.markers[i].setPosition(latLng);
+          break;
+        }
+      }
+    });
+
+    // Socket Marcador-borrar
+    this.wsService.listen('delete-marker').subscribe((id: string) => {
+      // Delete marker of the Markers Array
+      for (const i in this.markers) {
+        if (this.markers[i].getTitle() === id) {
+          this.markers[i].setMap(null);
+          break;
+        }
+      }
+    });
   }
 
   /**
@@ -59,6 +79,7 @@ export class MapComponent implements OnInit {
       this.addMarker(newMarker);
 
       // Emitir evento de socket, agregar marcador
+      this.wsService.emit('new-marker', newMarker);
     });
 
     for (const place of this.lugares) {
@@ -77,7 +98,8 @@ export class MapComponent implements OnInit {
       map: this.map,
       animation: google.maps.Animation.DROP,
       position: latLng,
-      draggable: true
+      draggable: true,
+      title: marcador.id
     });
 
     this.markers.push(marker);
@@ -100,18 +122,19 @@ export class MapComponent implements OnInit {
       marker.setMap(null);
 
       // Disparar un evento de socket, para borrar el marcador
+      this.wsService.emit('delete-marker', marcador.id);
     });
 
     google.maps.event.addDomListener(marker, 'drag', coors => {
       const newMarker: Place = {
         name: marcador.name,
         lat: coors.latLng.lat(),
-        lng: coors.latLng.lng()
+        lng: coors.latLng.lng(),
+        id: marker.getTitle()
       };
 
-      console.log(newMarker);
-
       // Disparar un evento de socket, para mover el marcador
+      this.wsService.emit('move-marker', newMarker);
     });
   }
 }
